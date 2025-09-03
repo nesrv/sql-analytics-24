@@ -280,6 +280,8 @@ DELETE FROM products WHERE price < 1000;
 ```sql
 -- Экспорт всех товаров
 \copy products TO 'products_export.csv' CSV HEADER;
+-- windows
+\copy products TO 'C:\temp\products_export.csv' CSV HEADER;
 
 -- Экспорт с условием
 \copy (SELECT name, price, stock_quantity FROM products WHERE is_active = TRUE) TO 'active_products.csv' CSV HEADER;
@@ -348,6 +350,175 @@ CREATE TABLE imported_data (
     COALESCE(city, 'Не указан') AS "Город"
 FROM customers 
 ORDER BY last_name) TO 'customers_report.txt' WITH (FORMAT text, DELIMITER '|', HEADER);
+```
+
+## 7. Группировка и фильтрация групп (GROUP BY и HAVING)
+
+### Создание дополнительных данных для примеров
+
+```sql
+-- Добавим таблицу заказов
+CREATE TABLE orders (
+    id SERIAL PRIMARY KEY,
+    customer_id INTEGER REFERENCES customers(id),
+    product_id INTEGER REFERENCES products(id),
+    quantity INTEGER NOT NULL,
+    order_date DATE DEFAULT CURRENT_DATE,
+    total_amount DECIMAL(10,2)
+);
+
+-- Заполним заказами
+INSERT INTO orders (customer_id, product_id, quantity, total_amount, order_date) VALUES
+(1, 1, 1, 89990.00, '2023-01-15'),
+(1, 3, 2, 3000.00, '2023-01-20'),
+(2, 2, 1, 79990.00, '2023-02-10'),
+(2, 4, 3, 7500.00, '2023-02-15'),
+(3, 1, 2, 179980.00, '2023-03-05'),
+(1, 4, 1, 2500.00, '2023-03-10'),
+(2, 3, 1, 1500.00, '2023-03-15');
+```
+
+### Примеры GROUP BY
+
+```sql
+-- Количество товаров по категориям
+SELECT 
+    c.name as category_name,
+    COUNT(p.id) as product_count
+FROM categories c
+LEFT JOIN products p ON c.id = p.category_id
+GROUP BY c.id, c.name;
+
+-- Общая сумма заказов по клиентам
+SELECT 
+    customer_id,
+    COUNT(*) as order_count,
+    SUM(total_amount) as total_spent
+FROM orders
+GROUP BY customer_id;
+
+-- Средняя цена товаров по категориям
+SELECT 
+    c.name as category_name,
+    AVG(p.price) as avg_price,
+    MIN(p.price) as min_price,
+    MAX(p.price) as max_price
+FROM categories c
+JOIN products p ON c.id = p.category_id
+GROUP BY c.id, c.name;
+```
+
+### Примеры HAVING
+
+```sql
+-- Клиенты с общей суммой заказов больше 50000
+SELECT 
+    customer_id,
+    COUNT(*) as order_count,
+    SUM(total_amount) as total_spent
+FROM orders
+GROUP BY customer_id
+HAVING SUM(total_amount) > 50000;
+
+-- Категории с количеством товаров больше 1
+SELECT 
+    c.name as category_name,
+    COUNT(p.id) as product_count
+FROM categories c
+LEFT JOIN products p ON c.id = p.category_id
+GROUP BY c.id, c.name
+HAVING COUNT(p.id) > 1;
+
+-- Клиенты с количеством заказов больше 2 И средним чеком больше 10000
+SELECT 
+    customer_id,
+    COUNT(*) as order_count,
+    AVG(total_amount) as avg_order,
+    SUM(total_amount) as total_spent
+FROM orders
+GROUP BY customer_id
+HAVING COUNT(*) > 2 AND AVG(total_amount) > 10000;
+```
+
+### Задачи GROUP BY и HAVING
+
+**Задача 15:** Найдите категории со средней ценой товаров больше 5000
+
+```sql
+-- Решение:
+SELECT 
+    c.name as category_name,
+    AVG(p.price) as avg_price,
+    COUNT(p.id) as product_count
+FROM categories c
+JOIN products p ON c.id = p.category_id
+GROUP BY c.id, c.name
+HAVING AVG(p.price) > 5000;
+```
+
+**Задача 16:** Найдите клиентов, которые сделали больше 1 заказа
+
+```sql
+-- Решение:
+SELECT 
+    c.first_name,
+    c.last_name,
+    COUNT(o.id) as order_count,
+    SUM(o.total_amount) as total_spent
+FROM customers c
+JOIN orders o ON c.id = o.customer_id
+GROUP BY c.id, c.first_name, c.last_name
+HAVING COUNT(o.id) > 1;
+```
+
+**Задача 17:** Найдите месяцы 2023 года с общей суммой заказов больше 100000
+
+```sql
+-- Решение:
+SELECT 
+    EXTRACT(MONTH FROM order_date) as month,
+    COUNT(*) as order_count,
+    SUM(total_amount) as monthly_total
+FROM orders
+WHERE EXTRACT(YEAR FROM order_date) = 2023
+GROUP BY EXTRACT(MONTH FROM order_date)
+HAVING SUM(total_amount) > 100000
+ORDER BY month;
+```
+
+### Сложные примеры с HAVING
+
+```sql
+-- Анализ активности клиентов
+SELECT 
+    c.first_name || ' ' || c.last_name as customer_name,
+    c.city,
+    COUNT(o.id) as order_count,
+    SUM(o.total_amount) as total_spent,
+    AVG(o.total_amount) as avg_order,
+    MAX(o.total_amount) as max_order
+FROM customers c
+JOIN orders o ON c.id = o.customer_id
+WHERE o.order_date >= '2023-01-01'
+GROUP BY c.id, c.first_name, c.last_name, c.city
+HAVING COUNT(o.id) >= 2 
+   AND SUM(o.total_amount) > 50000
+   AND AVG(o.total_amount) > 20000
+ORDER BY total_spent DESC;
+
+-- Товары с высокими продажами
+SELECT 
+    p.name as product_name,
+    c.name as category_name,
+    COUNT(o.id) as times_ordered,
+    SUM(o.quantity) as total_quantity,
+    SUM(o.total_amount) as total_revenue
+FROM products p
+JOIN orders o ON p.id = o.product_id
+JOIN categories c ON p.category_id = c.id
+GROUP BY p.id, p.name, c.name
+HAVING COUNT(o.id) >= 2 OR SUM(o.total_amount) > 100000
+ORDER BY total_revenue DESC;
 ```
 
 ## Комплексные задачи
