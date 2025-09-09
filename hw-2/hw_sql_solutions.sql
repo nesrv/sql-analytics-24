@@ -123,6 +123,195 @@ WHERE c1.name = 'Москва' AND c2.name = 'Екатеринбург'
 ORDER BY rp.distance_km
 LIMIT 3;
 
+
+-- 11a. Простая PL/pgSQL функция поиска пути
+CREATE OR REPLACE FUNCTION find_path(start_city TEXT, end_city TEXT)
+RETURNS TABLE(distance INTEGER, path TEXT)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RETURN QUERY
+    WITH RECURSIVE paths AS (
+        SELECT r.to_city_id, r.distance_km, c.name AS route
+        FROM routes r
+        JOIN cities c ON r.from_city_id = c.id
+        WHERE c.name = start_city
+        
+        UNION ALL
+        
+        SELECT r.to_city_id, p.distance_km + r.distance_km, p.route || ' -> ' || c.name
+        FROM paths p
+        JOIN routes r ON p.to_city_id = r.from_city_id
+        JOIN cities c ON r.to_city_id = c.id
+        WHERE p.route NOT LIKE '%' || c.name || '%'
+    )
+    SELECT p.distance_km, p.route || ' -> ' || c.name
+    FROM paths p
+    JOIN cities c ON p.to_city_id = c.id
+    WHERE c.name = end_city
+    ORDER BY p.distance_km
+    LIMIT 1;
+END;
+$$;
+
+-- Использование
+SELECT * FROM find_path('Москва', 'Екатеринбург');
+
+-- 11b. SQL версия функции поиска кратчайшего пути
+-- Параметры: start_city - город отправления, end_city - город назначения
+-- Возвращает: расстояние и путь кратчайшего маршрута
+CREATE OR REPLACE FUNCTION find_path_sql(start_city TEXT, end_city TEXT)
+RETURNS TABLE(distance INTEGER, path TEXT)
+LANGUAGE sql
+AS $$
+    WITH RECURSIVE paths AS (
+        -- Базовый случай: начинаем с прямых маршрутов из стартового города
+        SELECT 
+            r.to_city_id,                    -- ID города назначения
+            r.distance_km,                   -- Расстояние от старта
+            c.name::TEXT AS route            -- Начальный путь (только стартовый город)
+        FROM routes r
+        JOIN cities c ON r.from_city_id = c.id
+        WHERE c.name = start_city            -- Фильтруем по стартовому городу
+        
+        UNION ALL
+        
+        -- Рекурсивный случай: добавляем следующие сегменты маршрута
+        SELECT 
+            r.to_city_id,                                        -- Новый город назначения
+            p.distance_km + r.distance_km,                      -- Общее расстояние (предыдущее + текущее)
+            (p.route || ' -> ' || c.name)::TEXT                  -- Полный путь (старый + новый город)
+        FROM paths p                                             -- Используем результаты предыдущей итерации
+        JOIN routes r ON p.to_city_id = r.from_city_id           -- Находим маршруты из текущего города
+        JOIN cities c ON r.to_city_id = c.id                    -- Получаем название следующего города
+        WHERE p.route NOT LIKE '%' || c.name || '%'             -- Избегаем циклов (не возвращаемся в уже посещенные города)
+    )
+    -- Финальный запрос: находим пути до целевого города
+    SELECT 
+        p.distance_km,                                       -- Общее расстояние
+        (p.route || ' -> ' || c.name)::TEXT                  -- Полный путь с конечным городом
+    FROM paths p
+    JOIN cities c ON p.to_city_id = c.id                    -- Получаем название конечного города
+    WHERE c.name = end_city                                  -- Фильтруем по целевому городу
+    ORDER BY p.distance_km                                   -- Сортируем по расстоянию (кратчайший первым)
+    LIMIT 1;                                                 -- Возвращаем только кратчайший маршрут
+$$;
+
+-- Использование SQL версии
+SELECT * FROM find_path_sql('Москва', 'Екатеринбург');
+
+
+CREATE OR REPLACE FUNCTION find_path_sql(start_city TEXT, end_city TEXT)
+RETURNS TABLE(distance INTEGER, path TEXT)
+LANGUAGE sql
+AS $$
+    -- 1. Сначала выполняется рекурсивный CTE (Common Table Expression) paths
+    WITH RECURSIVE paths AS (
+        -- 2. Базовый запрос (нерекурсивная часть) - получаем начальную точку
+        SELECT 
+            r.to_city_id,           -- ID города назначения
+            r.distance_km,          -- Дистанция до следующего города
+            c.name::TEXT AS route   -- Начинаем формировать маршрут
+        FROM routes r
+        JOIN cities c ON r.from_city_id = c.id
+        WHERE c.name = start_city   -- Ищем маршруты из начального города
+        
+        UNION ALL  -- Объединяем результаты рекурсивных итераций
+        
+        -- 3. Рекурсивная часть - на каждой итерации расширяем пути
+        SELECT 
+            r.to_city_id,                       -- ID следующего города
+            p.distance_km + r.distance_km,      -- Суммируем дистанцию
+            (p.route || ' -> ' || c.name)::TEXT -- Добавляем город к маршруту
+        FROM paths p
+        JOIN routes r ON p.to_city_id = r.from_city_id  -- Ищем маршруты из текущего города
+        JOIN cities c ON r.to_city_id = c.id            -- Получаем название следующего города
+        -- 4. Условие остановки: предотвращаем зацикливание
+        WHERE p.route NOT LIKE '%' || c.name || '%'     -- Исключаем города, уже посещенные в маршруте
+    )
+    -- 5. После завершения рекурсии выбираем результат
+    SELECT 
+        p.distance_km,                      -- Итоговая дистанция
+        (p.route || ' -> ' || c.name)::TEXT -- Завершаем маршрут конечным городом
+    FROM paths p
+    JOIN cities c ON p.to_city_id = c.id    -- Связываем с конечным городом
+    WHERE c.name = end_city                 -- Фильтруем только нужный конечный город
+    ORDER BY p.distance_km                  -- Сортируем по дистанции (кратчайший путь)
+    LIMIT 1;                                -- Берем только самый короткий маршрут
+$$;
+
+
+-- **Пошаговый порядок выполнения:**
+
+-- 1. **Инициализация**: Выполняется базовый запрос - находятся все маршруты из начального города
+-- 2. **Рекурсивные итерации**: Для каждого найденного пути ищутся продолжения маршрута
+-- 3. **Проверка циклов**: На каждой итерации исключаются города, уже посещенные в текущем маршруте
+-- 4. **Завершение рекурсии**: Когда не остается новых допустимых путей для расширения
+-- 5. **Финальный отбор**: Из всех найденных путей выбирается кратчайший до конечного города
+
+-- **Особенности работы:**
+-- - Функция находит ВСЕ возможные пути без циклов между городами
+-- - Возвращает только самый короткий маршрут
+-- - Использует рекурсивный SQL для обхода графа маршрутов
+-- - Предотвращает зацикливание через проверку уже пройденных городов
+
+
+
+-- 11c. Простой вариант без функции - прямой CTE запрос
+
+WITH RECURSIVE paths AS (
+    -- Начинаем с Москвы
+    SELECT r.to_city_id, r.distance_km, c.name::TEXT AS route
+    FROM routes r
+    JOIN cities c ON r.from_city_id = c.id
+    WHERE c.name = 'Москва'
+    
+    UNION ALL
+    
+    -- Добавляем следующие города
+    SELECT r.to_city_id, p.distance_km + r.distance_km, (p.route || ' -> ' || c.name)::TEXT
+    FROM paths p
+    JOIN routes r ON p.to_city_id = r.from_city_id
+    JOIN cities c ON r.to_city_id = c.id
+    WHERE p.route NOT LIKE '%' || c.name || '%'
+)
+SELECT p.distance_km, (p.route || ' -> ' || c.name)::TEXT AS full_path
+FROM paths p
+JOIN cities c ON p.to_city_id = c.id
+WHERE c.name = 'Екатеринбург'
+ORDER BY p.distance_km
+LIMIT 1;
+
+
+-- ПОСЛЕДОВАТЕЛЬНОСТЬ ВЫПОЛНЕНИЯ:
+WITH RECURSIVE paths AS (
+    -- ШАГ 1: Базовый случай - находим все прямые маршруты из Москвы
+    -- Результат: Москва -> СПб, Москва -> Казань, и т.д.
+    SELECT r.to_city_id, r.distance_km, c.name::TEXT AS route
+    FROM routes r
+    JOIN cities c ON r.from_city_id = c.id
+    WHERE c.name = 'Москва'
+    
+    UNION ALL
+    
+    -- ШАГ 2,3,4...: Рекурсивные итерации - для каждого найденного пути
+    -- ищем следующие возможные маршруты
+    -- Пример: Москва -> СПб -> Новгород, Москва -> Казань -> Пермь
+    SELECT r.to_city_id, p.distance_km + r.distance_km, (p.route || ' -> ' || c.name)::TEXT
+    FROM paths p                                    -- Берем результаты предыдущей итерации
+    JOIN routes r ON p.to_city_id = r.from_city_id  -- Находим маршруты из конечного города
+    JOIN cities c ON r.to_city_id = c.id            -- Получаем название нового города
+    WHERE p.route NOT LIKE '%' || c.name || '%'     -- Проверяем: не были ли мы уже в этом городе
+)
+-- ШАГ ФИНАЛ: Из всех найденных путей выбираем только те,
+-- которые заканчиваются в Екатеринбурге, и берем кратчайший
+SELECT p.distance_km, (p.route || ' -> ' || c.name)::TEXT AS full_path
+FROM paths p
+JOIN cities c ON p.to_city_id = c.id
+WHERE c.name = 'Екатеринбург'        -- Фильтруем по целевому городу
+ORDER BY p.distance_km                              -- Сортируем по расстоянию
+LIMIT 1;                                            -- Возвращаем только кратчайший
+
 -- 12. Показать города с наибольшим количеством входящих и исходящих маршрутов
 SELECT c.name, 
        COUNT(r1.id) AS outgoing_routes,

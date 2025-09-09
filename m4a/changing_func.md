@@ -35,13 +35,9 @@ SELECT NEXTVAL('seq');  -- изменяет состояние последов�
 -- Функция генерации случайного ID
 CREATE OR REPLACE FUNCTION generate_random_id()
 RETURNS TEXT
-LANGUAGE plpgsql
+LANGUAGE sql
 VOLATILE  -- явно указываем (можно опустить, т.к. по умолчанию)
-AS $$
-BEGIN
-    RETURN 'ID_' || FLOOR(RANDOM() * 1000000)::TEXT;
-END;
-$$;
+RETURN 'ID_' || FLOOR(RANDOM() * 1000000)::TEXT;
 
 -- Каждый вызов возвращает новое значение
 SELECT generate_random_id();  -- ID_123456
