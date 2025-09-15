@@ -75,7 +75,7 @@ SELECT name, info #>> '{specs,storage}' AS storage_text FROM products;
 ### Проверка существования ключей
 ```sql
 -- Проверка наличия ключа
-SELECT name FROM products WHERE info ? 'brand';
+SELECT name FROM products WHERE info::JSONB ? 'brand';
 
 -- Проверка наличия любого из ключей
 SELECT name FROM products WHERE metadata ?| ARRAY['tags', 'category'];
